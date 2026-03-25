@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>scene单核单线程能效曲线</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        /* 基础样式 */
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            color: #333;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+        }
+
+        h1 { text-align: center; margin-bottom: 10px; color: #2c3e50; }
+        .subtitle { text-align: center; color: #7f8c8d; margin-bottom: 30px; font-size: 14px; }
+
+        /* 上传区域 */
+        .upload-area {
+            border: 2px dashed #3498db;
+            border-radius: 10px;
+            padding: 30px;
+            text-align: center;
+            background: #f8f9fa;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-bottom: 30px;
+        }
+        .upload-area:hover { border-color: #2ecc71; background: #eafaf1; }
+        .upload-area input { display: none; }
+
+        /* 统计面板 */
+        .stats-panel {
+            display: none;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 30px;
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+        .stat-card {
+            background: rgba(255,255,255,0.1);
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        .stat-label { font-size: 12px; opacity: 0.8; margin-bottom: 5px; }
+        .stat-value { font-size: 20px; font-weight: bold; }
+
+        /* 图表网格 */
+        .charts-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(600px, 1fr));
+            gap: 30px;
+        }
+
+        .chart-card {
+            background: white;
+            border: 1px solid #eee;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+        }
+        .chart-title {
+            font-size: 16px;
+            font-weight: bold;
+            color: #34495e;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #eee;
+        }
+        .chart-container {
+            position: relative;
+            height: 400px;
+        }
+
+        /* 说明文字 */
+        .note-box {
+            background: #e8f4f8;
+            border-left: 4px solid #3498db;
+            padding: 10px 15px;
+            margin-top: 10px;
+            font-size: 13px;
+            color: #555;
+            border-radius: 4px;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>📊 scene单核单线程能效曲线分析工具</h1>
+    <p class="subtitle">自动识别CSV列名 · 多维度分析 · 交互式图表</p>
+
+    <!-- 文件上传 -->
+    <div class="upload-area" id="dropZone">
+        <input type="file" id="csvFile" accept=".csv">
+        <h3>📁 点击或拖拽上传 CSV 文件</h3>
+        <p style="color: #999; font-size: 12px; margin-top: 10px;">支持标准逗号分隔的CSV，自动过滤首行标题</p>
+    </div>
+
+    <!-- 统计摘要面板 -->
+    <div class="stats-panel" id="statsPanel">
+        <h3 style="margin-bottom: 15px;">📈 数据分析摘要</h3>
+        <div class="stats-grid" id="statsGrid"></div>
+    </div>
+
+    <!-- 备注说明 -->
+    <div class="note-box" id="noteBox">
+        <strong>💡 功耗说明：</strong> Power(mW) 包含屏幕等整机功耗；Dynamic Power(mW) 为减去待机功耗后的动态功耗。
+    </div>
+
+    <!-- 图表容器 -->
+    <div class="charts-grid" id="chartsContainer"></div>
+</div>
+
+<script>
+    // 全局变量
+    let rawData = [];
+    let headers = [];
+    let charts = {}; // 存储图表实例
+    const CSV_DELIMITER = ',';
+
+    // 颜色配置
+    const COLORS = {
+        primary: 'rgb(75, 192, 192)',
+        secondary: 'rgb(255, 99, 132)',
+        tertiary: 'rgb(54, 162, 235)',
+        grey: 'rgb(201, 203, 207)',
+        yellow: 'rgb(255, 205, 86)',
+        purple: 'rgb(153, 102, 255)',
+        orange: 'rgb(255, 159, 64)'
+    };
+
+    // 页面加载初始化
+    document.getElementById('dropZone').addEventListener('click', () => document.getElementById('csvFile').click());
+    document.getElementById('csvFile').addEventListener('change', handleFileUpload);
+
+    // 处理文件上传
+    function handleFileUpload(e) {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            parseCSV(e.target.result);
+            runAnalysis();
+        };
+        reader.readAsText(file);
+    }
+
+    // 解析CSV
+    function parseCSV(text) {
+        const lines = text.trim().split(/\r?\n/);
+        if (lines.length < 2) return;
+
+        // 解析表头
+        headers = lines[0].split(CSV_DELIMITER).map(h => h.trim());
+
+        // 解析数据
+        rawData = [];
+        for (let i = 1; i < lines.length; i++) {
+            const cols = lines[i].split(CSV_DELIMITER);
+            if (cols.length < headers.length) continue;
+
+            const row = {};
+            headers.forEach((h, idx) => {
+                let val = cols[idx] ? cols[idx].trim() : '';
+                // 处理特殊字符和数字转换
+                row[h] = (val === '-' || val === '') ? null : parseFloat(val);
+            });
+            rawData.push(row);
+        }
+        console.log(`解析完成: ${rawData.length} 行数据`);
+    }
+
+    // 核心分析逻辑
+    function runAnalysis() {
+        if (rawData.length === 0) return;
+
+        // 1. 自动检测列
+        const detected = detectColumns();
+        console.log("检测到的列:", detected);
+
+        // 2. 生成统计面板
+        generateStats(detected);
+
+        // 3. 清空旧图表
+        document.getElementById('chartsContainer').innerHTML = '';
+
+        // 4. 绘制图表
+        // 图表1: CPU核心负载对比 (柱状图)
+        renderCpuLoadChart(detected);
+
+        // 图表2: 功耗分析 (折线图 - 双Y轴)
+        renderPowerChart(detected);
+
+        // 图表3: 能效曲线 (重点分析)
+        renderEfficiencyChart(detected);
+
+        // 图表4: 温度变化
+        renderTemperatureChart(detected);
+
+        // 显示备注
+        document.getElementById('noteBox').style.display = 'block';
+    }
+
+    // 列检测逻辑 (模拟Python的自动检测)
+    function detectColumns() {
+        const cols = {
+            cpuCols: headers.filter(h => h.includes('CPU') && h.includes('Cycles')),
+            powerCols: headers.filter(h => h.includes('Power')),
+            effCol: headers.find(h => h.includes('Efficiency')),
+            tempCol: headers.find(h => h.includes('℃')),
+            mainCpu: null
+        };
+
+        // 智能识别主要CPU (数值变化最大的那个核心)
+        if (cols.cpuCols.length > 0) {
+            let maxVariance = -1;
+            cols.cpuCols.forEach(col => {
+                const values = rawData.map(r => r[col]).filter(v => v !== null);
+                const range = Math.max(...values) - Math.min(...values);
+                if (range > maxVariance) {
+                    maxVariance = range;
+                    cols.mainCpu = col;
+                }
+            });
+        }
+        return cols;
+    }
+
+    // 生成统计数据
+    // 生成统计数据
+    function generateStats(cols) {
+        const panel = document.getElementById('statsPanel');
+        const grid = document.getElementById('statsGrid');
+        grid.innerHTML = ''; // 清空
+
+        // 通用统计函数
+        const getStats = (data) => {
+            const clean = data.filter(v => v !== null && !isNaN(v));
+            if (clean.length === 0) return { min: 0, max: 0, avg: 0 };
+            const sum = clean.reduce((a, b) => a + b, 0);
+            return {
+                min: Math.min(...clean).toFixed(1),
+                max: Math.max(...clean).toFixed(1),
+                avg: (sum / clean.length).toFixed(1)
+            };
+        };
+
+        // 1. CPU统计
+        if (cols.mainCpu) {
+            const stats = getStats(rawData.map(r => r[cols.mainCpu]));
+            addStatCard(grid, `主要核心 (${cols.mainCpu.split('(')[0]})`, `范围: ${stats.min} ~ ${stats.max}`);
+        }
+
+        // 2. 高能效频率区间 (修改部分)
+        if (cols.effCol && cols.mainCpu) {
+            // 筛选能效 > 50% 的数据行
+            const highEffRows = rawData.filter(r => r[cols.effCol] !== null && r[cols.effCol] > 50);
+
+            if (highEffRows.length > 0) {
+                // 提取这些行对应的 CPU 频率数值
+                const cycles = highEffRows.map(r => r[cols.mainCpu]).filter(v => v !== null);
+
+                if (cycles.length > 0) {
+                    const minCycle = Math.min(...cycles);
+                    const maxCycle = Math.max(...cycles);
+                    // 显示格式：例如 "372 ~ 2287"
+                    addStatCard(grid, '高能效频率点 (>50%)', `${minCycle} ~ ${maxCycle}`);
+                } else {
+                    addStatCard(grid, '高能效频率点 (>50%)', '无有效数据');
+                }
+            } else {
+                // 如果没有能效超过 50% 的点
+                addStatCard(grid, '高能效频率点 (>50%)', '未覆盖');
+            }
+        }
+
+        // 3. 温度统计
+        if (cols.tempCol) {
+            const stats = getStats(rawData.map(r => r[cols.tempCol]));
+            addStatCard(grid, '温度范围', `${stats.min}℃ ~ ${stats.max}℃`);
+        }
+
+        // 4. 功耗统计
+        if (cols.powerCols.length > 0) {
+            const totalCol = cols.powerCols.find(c => !c.includes('Dynamic'));
+            if (totalCol) {
+                const stats = getStats(rawData.map(r => r[totalCol]));
+                addStatCard(grid, '整机功耗范围', `${stats.min} ~ ${stats.max} mW`);
+            }
+        }
+
+        panel.style.display = 'block';
+    }
+
+
+    function addStatCard(container, title, value) {
+        const div = document.createElement('div');
+        div.className = 'stat-card';
+        div.innerHTML = `<div class="stat-label">${title}</div><div class="stat-value">${value}</div>`;
+        container.appendChild(div);
+    }
+
+    // --- 图表绘制函数 ---
+
+    function createChartCanvas(id, title) {
+        const container = document.getElementById('chartsContainer');
+        const card = document.createElement('div');
+        card.className = 'chart-card';
+        card.innerHTML = `
+            <div class="chart-title">${title}</div>
+            <div class="chart-container">
+                <canvas id="${id}"></canvas>
+            </div>
+        `;
+        container.appendChild(card);
+        return document.getElementById(id).getContext('2d');
+    }
+
+    // 图表1: CPU负载分布
+    // 图表1: CPU全核频率趋势 (修改为折线图)
+    // --- 图表绘制函数 (已全部优化Tooltip) ---
+
+    // 图表1: CPU全核频率趋势 (折线图)
+    function renderCpuLoadChart(cols) {
+        if (!cols.cpuCols || cols.cpuCols.length === 0) return;
+
+        const ctx = createChartCanvas('chartCpuLoad', 'CPU 核心频率趋势');
+
+        // 定义颜色组
+        const lineColors = [
+            'rgb(255, 99, 132)', 'rgb(54, 162, 235)', 'rgb(255, 205, 86)',
+            'rgb(75, 192, 192)', 'rgb(153, 102, 255)', 'rgb(255, 159, 64)',
+            'rgb(60, 179, 113)', 'rgb(128, 128, 128)'
+        ];
+
+        // X轴为数据点序号
+        const labels = rawData.map((_, i) => i + 1);
+
+        // 为每个核心生成数据集
+        const datasets = cols.cpuCols.map((col, index) => {
+            return {
+                label: col.split('(')[0],
+                data: rawData.map(r => r[col]),
+                borderColor: lineColors[index % lineColors.length],
+                backgroundColor: 'rgba(0,0,0,0)',
+                borderWidth: 2,
+                tension: 0.2,
+                pointRadius: 3
+            };
+        });
+
+        charts.cpuLoad = new Chart(ctx, {
+            type: 'line',
+            data: { labels: labels, datasets: datasets },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { position: 'top' },
+                    tooltip: {
+                        mode: 'index',      // 核心优化：显示同一X轴点的所有数据
+                        intersect: false,   // 核心优化：不需要精确点在点上
+                    }
+                },
+                scales: {
+                    x: { title: { display: true, text: '数据点' } },
+                    y: { title: { display: true, text: '频率' }, beginAtZero: true }
+                }
+            }
+        });
+    }
+
+    // 图表2: 功耗分析
+    function renderPowerChart(cols) {
+        if (!cols.mainCpu || cols.powerCols.length === 0) return;
+
+        const ctx = createChartCanvas('chartPower', '功耗分析: 整机功耗 vs 动态功耗');
+        const labels = rawData.map((_, i) => i + 1);
+        const datasets = [];
+
+        const dynCol = cols.powerCols.find(c => c.includes('Dynamic'));
+        if (dynCol) {
+            datasets.push({
+                label: 'Dynamic Power (mW) - 扣除待机',
+                data: rawData.map(r => r[dynCol]),
+                borderColor: COLORS.tertiary,
+                backgroundColor: 'rgba(54, 162, 235, 0.2)',
+                fill: true,
+                tension: 0.3,
+                yAxisID: 'y'
+            });
+        }
+
+        const totalCol = cols.powerCols.find(c => !c.includes('Dynamic'));
+        if (totalCol) {
+            datasets.push({
+                label: 'Power (mW) - 整机(含屏幕)',
+                data: rawData.map(r => r[totalCol]),
+                borderColor: 'rgb(50, 50, 50)',
+                backgroundColor: 'rgba(50, 50, 50, 0.1)',
+                borderWidth: 2,
+                tension: 0.3,
+                yAxisID: 'y'
+            });
+        }
+
+        charts.power = new Chart(ctx, {
+            type: 'line',
+            data: { labels, datasets },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { position: 'top' },
+                    tooltip: {
+                        mode: 'index',      // 优化：同时显示双功耗数据
+                        intersect: false,
+                    }
+                },
+                scales: {
+                    y: { beginAtZero: true, title: { display: true, text: '功耗' } },
+                    x: { title: { display: true, text: '测试样本点' } }
+                }
+            }
+        });
+    }
+
+    // 图表3: 能效曲线
+    function renderEfficiencyChart(cols) {
+        if (!cols.mainCpu || !cols.effCol) return;
+
+        const ctx = createChartCanvas('chartEff', '能效曲线分析 (Efficiency vs Load)');
+
+        const xData = rawData.map(r => r[cols.mainCpu]);
+        const yData = rawData.map(r => r[cols.effCol]);
+
+        // 找最高点
+        let maxEff = -1, maxIdx = 0;
+        yData.forEach((val, i) => {
+            if (val > maxEff) { maxEff = val; maxIdx = i; }
+        });
+
+        charts.eff = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: xData,
+                datasets: [
+                    {
+                        label: '能效 (%)',
+                        data: yData,
+                        borderColor: COLORS.secondary,
+                        backgroundColor: 'rgba(255, 99, 132, 0.1)',
+                        fill: true,
+                        tension: 0.3
+                    },
+                    {
+                        label: '最佳工作点',
+                        data: xData.map((x, i) => i === maxIdx ? yData[i] : null),
+                        borderColor: 'gold',
+                        backgroundColor: 'gold',
+                        pointRadius: 8,
+                        pointStyle: 'star',
+                        showLine: false
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    x: {
+                        title: { display: true, text: cols.mainCpu },
+                        ticks: { maxTicksLimit: 10 }
+                    },
+                    y: {
+                        title: { display: true, text: '能效 (%)' },
+                        suggestedMin: 0,
+                        suggestedMax: 110
+                    }
+                },
+                plugins: {
+                    tooltip: {
+                        mode: 'index',      // 优化：悬停时同时显示负载和能效
+                        intersect: false,
+                        callbacks: {
+                            title: (context) => `负载: ${context[0].label} M Cycles`,
+                            label: (context) => {
+                                if (context.dataset.label === '最佳工作点') return '最佳点';
+                                return `能效: ${context.raw}%`;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    // 图表4: 温度曲线
+    function renderTemperatureChart(cols) {
+        if (!cols.mainCpu || !cols.tempCol) return;
+
+        const ctx = createChartCanvas('chartTemp', '温度变化曲线');
+        const labels = rawData.map((_, i) => i + 1);
+
+        charts.temp = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'CPU Temperature (℃)',
+                    data: rawData.map(r => r[cols.tempCol]),
+                    borderColor: COLORS.orange,
+                    backgroundColor: 'rgba(255, 159, 64, 0.2)',
+                    fill: true,
+                    tension: 0.3
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { position: 'top' },
+                    tooltip: {
+                        mode: 'index',      // 优化：统一风格
+                        intersect: false,
+                    }
+                },
+                scales: {
+                    y: { suggestedMin: 25, suggestedMax: 70 }
+                }
+            }
+        });
+    }
+
+</script>
+
+</body>
+</html>
