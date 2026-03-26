@@ -126,7 +126,7 @@
 
     <!-- 备注说明 -->
     <div class="note-box" id="noteBox">
-        <strong>💡 功耗说明：</strong> Power(mW) 包含屏幕等整机功耗；Dynamic Power(mW) 为减去待机功耗后的动态功耗。
+        <strong>💡 功耗说明：</strong> Power(mW) 包含屏幕等整机功耗；Dynamic Power(mW) 几乎等于核心动态功耗。
     </div>
 
     <!-- 图表容器 -->
@@ -271,7 +271,7 @@
         // 1. CPU统计
         if (cols.mainCpu) {
             const stats = getStats(rawData.map(r => r[cols.mainCpu]));
-            addStatCard(grid, `主要核心 (${cols.mainCpu.split('(')[0]})`, `范围: ${stats.min} ~ ${stats.max}`);
+            addStatCard(grid, `主要核心 (${cols.mainCpu.split('(')[0]})`, `范围: ${stats.min}M ~ ${stats.max}M`);
         }
 
         // 2. 高能效频率区间 (修改部分)
@@ -287,13 +287,13 @@
                     const minCycle = Math.min(...cycles);
                     const maxCycle = Math.max(...cycles);
                     // 显示格式：例如 "372 ~ 2287"
-                    addStatCard(grid, '高能效频率点 (>50%)', `${minCycle} ~ ${maxCycle}`);
+                    addStatCard(grid, '相对高能效频率点 (>50%)', `${minCycle}M ~ ${maxCycle}M`);
                 } else {
-                    addStatCard(grid, '高能效频率点 (>50%)', '无有效数据');
+                    addStatCard(grid, '相对高能效频率点 (>50%)', '无有效数据');
                 }
             } else {
                 // 如果没有能效超过 50% 的点
-                addStatCard(grid, '高能效频率点 (>50%)', '未覆盖');
+                addStatCard(grid, '相对高能效频率点 (>50%)', '未覆盖');
             }
         }
 
@@ -452,7 +452,7 @@
     function renderEfficiencyChart(cols) {
         if (!cols.mainCpu || !cols.effCol) return;
 
-        const ctx = createChartCanvas('chartEff', '能效曲线分析 (Efficiency vs Load)');
+        const ctx = createChartCanvas('chartEff', '相对能效曲线分析 (Efficiency)');
 
         const xData = rawData.map(r => r[cols.mainCpu]);
         const yData = rawData.map(r => r[cols.effCol]);
@@ -462,7 +462,6 @@
         yData.forEach((val, i) => {
             if (val > maxEff) { maxEff = val; maxIdx = i; }
         });
-
         charts.eff = new Chart(ctx, {
             type: 'line',
             data: {
@@ -479,9 +478,11 @@
                     {
                         label: '最佳工作点',
                         data: xData.map((x, i) => i === maxIdx ? yData[i] : null),
-                        borderColor: 'gold',
+                        borderColor: 'rgba(0, 0, 0, 0.8)', // 添加深色边框，增强对比
+                        borderWidth: 3,                   // 边框粗细
                         backgroundColor: 'gold',
-                        pointRadius: 8,
+                        pointRadius: 15,                  // 点半径加大 (原为8)
+                        hoverRadius: 20,                  // 悬停时更大
                         pointStyle: 'star',
                         showLine: false
                     }
@@ -516,6 +517,7 @@
                 }
             }
         });
+
     }
 
     // 图表4: 温度曲线
